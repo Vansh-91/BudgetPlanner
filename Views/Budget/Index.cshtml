@@ -1,0 +1,310 @@
+@model List<BudgetPlanner.Models.Transaction>
+@using System.Text.Json
+
+@{
+    var fromString = Context?.Request?.Query["from"].ToString();
+    var toString = Context?.Request?.Query["to"].ToString();
+
+    DateTime.TryParse(fromString, out DateTime from);
+    DateTime.TryParse(toString, out DateTime to);
+
+    var filtered = Model.Where(x =>
+        (from == DateTime.MinValue || x.Date >= from) &&
+        (to == DateTime.MinValue || x.Date <= to)
+    ).ToList();
+
+    var income = filtered.Where(x => x.Type == "Income").Sum(x => x.Amount);
+    var expense = filtered.Where(x => x.Type == "Expense").Sum(x => x.Amount);
+    var balance = income + expense;
+
+    var categories = filtered.Select(x => x.Category).ToList();
+    var amounts = filtered.Select(x => x.Amount).ToList();
+    var categoryJson = JsonSerializer.Serialize(categories);
+    var amountJson = JsonSerializer.Serialize(amounts);
+
+    var monthlyData = filtered
+        .Where(x => x.Type == "Expense")
+        .GroupBy(x => new { x.Date.Year, x.Date.Month })
+        .OrderBy(g => g.Key.Year).ThenBy(g => g.Key.Month)
+        .Select(g => new {
+            Month = $"{System.Globalization.CultureInfo.CurrentCulture.DateTimeFormat.GetAbbreviatedMonthName(g.Key.Month)} {g.Key.Year}",
+            Total = Math.Abs(g.Sum(x => x.Amount))
+        }).ToList();
+
+    var monthlyLabelsJson = JsonSerializer.Serialize(monthlyData.Select(x => x.Month));
+    var monthlyValuesJson = JsonSerializer.Serialize(monthlyData.Select(x => x.Total));
+
+    var insights = new List<string>();
+    var latestTwoMonths = filtered
+        .Where(x => x.Type == "Expense")
+        .GroupBy(x => new { x.Date.Year, x.Date.Month })
+        .OrderByDescending(g => g.Key.Year * 100 + g.Key.Month)
+        .Take(2)
+        .ToList();
+
+    if (latestTwoMonths.Count >= 1)
+    {
+        var current = latestTwoMonths[0];
+        var byCategoryCurrent = current.GroupBy(x => x.Category)
+            .ToDictionary(g => g.Key, g => Math.Abs((double)g.Sum(t => t.Amount)));
+
+        Dictionary<string, double> byCategoryPrevious = new();
+        if (latestTwoMonths.Count == 2)
+        {
+            var previous = latestTwoMonths[1];
+            byCategoryPrevious = previous.GroupBy(x => x.Category)
+                .ToDictionary(g => g.Key, g => Math.Abs((double)g.Sum(t => t.Amount)));
+        }
+
+        foreach (var cat in byCategoryCurrent.Keys)
+        {
+            double currentAmount = byCategoryCurrent[cat];
+            double prevAmount = byCategoryPrevious.ContainsKey(cat) ? byCategoryPrevious[cat] : 0;
+            double diff = currentAmount - prevAmount;
+            double percent = prevAmount > 0 ? (diff / prevAmount) * 100 : 0;
+
+            insights.Add($"You spent ₹{currentAmount:F0} on {cat} this month. {(prevAmount > 0 ? $"Change from last month: {percent:F1}%" : "No previous data to compare.")}");
+        }
+
+        double totalExpenseCurrent = current.Sum(x => (double)x.Amount);
+        insights.Add($"Total expenses this month: ₹{totalExpenseCurrent:F0}.");
+
+        if (income > 0)
+        {
+            double savingPercent = ((double)balance / (double)income) * 100;
+            insights.Add($"You saved {(balance >= 0 ? "" : "-")}₹{Math.Abs(balance):F0} this period. Savings rate: {savingPercent:F1}%.");
+        }
+
+        var topCategory = byCategoryCurrent.OrderByDescending(x => x.Value).FirstOrDefault();
+        if (!string.IsNullOrEmpty(topCategory.Key))
+        {
+            insights.Add($"Top spending category this month: {topCategory.Key} (₹{topCategory.Value:F0}).");
+        }
+    }
+}
+
+<h2 class="mb-4">Dashboard</h2>
+<a class="btn btn-primary mb-3" href="/Budget/Add">➕ Add Transaction</a>
+<a class="btn btn-outline-success mb-3" href="/Budget/ExportToExcel">📅 Export to Excel</a>
+
+<div class="alert alert-info text-light bg-dark border-info">
+    <h5 class="mb-2">🔍 Smart Insights</h5>
+    @if (insights.Count > 0)
+    {
+        <ul class="mb-0">
+            @foreach (var insight in insights)
+            {
+                <li>@insight</li>
+            }
+        </ul>
+    }
+    else
+    {
+        <p class="mb-0">No spending patterns detected yet. Add transactions across different months to see insights.</p>
+    }
+</div>
+
+<form method="get" class="row g-2 mb-4 align-items-end">
+    <div class="col-md-3">
+        <label class="form-label text-light">From</label>
+        <input type="date" name="from" class="form-control bg-dark text-light border-secondary" value="@fromString" />
+    </div>
+    <div class="col-md-3">
+        <label class="form-label text-light">To</label>
+        <input type="date" name="to" class="form-control bg-dark text-light border-secondary" value="@toString" />
+    </div>
+    <div class="col-md-3">
+        <label class="form-label text-light">Quick Range</label>
+        <select class="form-select bg-dark text-light border-secondary" onchange="applyQuickRange(this.value)">
+            <option disabled selected>-- Select --</option>
+            <option value="thisMonth">This Month</option>
+            <option value="last7Days">Last 7 Days</option>
+        </select>
+    </div>
+    <div class="col-md-3">
+        <button type="submit" class="btn btn-outline-primary w-100">🔍 Filter</button>
+    </div>
+</form>
+
+<!-- Continue with the rest of your dashboard content (charts, tables, etc.) -->
+
+
+<div class="row mb-4 text-center">
+    <div class="col-md-4">
+        <div class="card p-3 text-success bg-dark border-success">
+            <h6>Total Income</h6>
+            <h4>₹@income</h4>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card p-3 text-danger bg-dark border-danger">
+            <h6>Total Expense</h6>
+            <h4>₹@Math.Abs(expense)</h4>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card p-3 text-info bg-dark border-info">
+            <h6>Balance</h6>
+            <h4>₹@balance</h4>
+        </div>
+    </div>
+</div>
+
+@if (filtered.Count == 0)
+{
+    <div class="alert alert-warning">No transactions yet in the selected range.</div>
+}
+else
+{
+    <div class="row mb-4">
+        <div class="col-md-6">
+            <div class="card p-3 h-100">
+                <h5 class="text-center mb-3" style="color: #c9d1d9;">📊 Spending Breakdown</h5>
+                <div style="position: relative; height: 300px;">
+                    <canvas id="expenseChart"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card p-3 h-100 position-relative">
+                <h5 class="text-center mb-3" style="color: #c9d1d9;">📅 Monthly Expense Trend</h5>
+                <div style="position: relative; height: 300px;">
+                    <canvas id="monthlyChart"></canvas>
+                    <button class="btn btn-sm btn-outline-light position-absolute" style="bottom: 5px; right: 5px; font-size: 12px; padding: 2px 6px;" onclick="toggleChartType()">Switch to Line Chart</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <table class="table table-dark table-striped">
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Description</th>
+                <th>Category</th>
+                <th>Amount (₹)</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var t in filtered)
+            {
+                <tr>
+                    <td>@t.Date.ToShortDateString()</td>
+                    <td>@t.Description</td>
+                    <td>@t.Category</td>
+                    <td>₹@t.Amount</td>
+                    <td>
+                        <a href="/Budget/Edit/@t.Id" class="btn btn-sm btn-outline-info me-2">✏️ Edit</a>
+                        <form method="post" asp-action="Delete" asp-route-id="@t.Id" class="d-inline">
+                            <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure you want to delete this transaction?');">🗑️ Delete</button>
+                        </form>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+<script>
+    function applyQuickRange(option) {
+        const today = new Date();
+        let fromDate, toDate = today.toISOString().split("T")[0];
+
+        if (option === "thisMonth") {
+            fromDate = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split("T")[0];
+        } else if (option === "last7Days") {
+            fromDate = new Date(today.setDate(today.getDate() - 6)).toISOString().split("T")[0];
+        }
+
+        document.querySelector('input[name="from"]').value = fromDate;
+        document.querySelector('input[name="to"]').value = toDate;
+    }
+
+    document.addEventListener("DOMContentLoaded", function () {
+        const labels = @Html.Raw(categoryJson);
+        const data = @Html.Raw(amountJson);
+        const monthLabels = @Html.Raw(monthlyLabelsJson);
+        const monthData = @Html.Raw(monthlyValuesJson);
+
+        if (typeof Chart !== "undefined") {
+            if (labels.length > 0 && data.length > 0) {
+                const ctx = document.getElementById('expenseChart').getContext('2d');
+                new Chart(ctx, {
+                    type: 'pie',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Spending by Category',
+                            data: data,
+                            backgroundColor: [
+                                'rgba(31, 119, 180, 0.8)',
+                                'rgba(255, 127, 14, 0.8)',
+                                'rgba(44, 160, 44, 0.8)',
+                                'rgba(214, 39, 40, 0.8)',
+                                'rgba(148, 103, 189, 0.8)'
+                            ]
+                        }]
+                    },
+                    options: {
+                        plugins: {
+                            legend: {
+                                labels: {
+                                    color: '#c9d1d9',
+                                    font: { size: 12 }
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            let currentChartType = 'bar';
+            let chartInstance;
+
+            function renderChart(type) {
+                const ctxBar = document.getElementById('monthlyChart').getContext('2d');
+                if (chartInstance) chartInstance.destroy();
+
+                chartInstance = new Chart(ctxBar, {
+                    type: type,
+                    data: {
+                        labels: monthLabels,
+                        datasets: [{
+                            label: 'Monthly Expenses',
+                            data: monthData,
+                            backgroundColor: type === 'bar' ? 'rgba(214, 39, 40, 0.7)' : 'rgba(214, 39, 40, 0.3)',
+                            borderColor: '#d62728',
+                            fill: type === 'line',
+                            borderWidth: 2,
+                            tension: 0.4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        scales: {
+                            y: { ticks: { color: '#c9d1d9' }, beginAtZero: true },
+                            x: { ticks: { color: '#c9d1d9' } }
+                        },
+                        plugins: {
+                            legend: {
+                                labels: {
+                                    color: '#c9d1d9',
+                                    font: { size: 12 }
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            renderChart(currentChartType);
+            window.toggleChartType = function () {
+                currentChartType = currentChartType === 'bar' ? 'line' : 'bar';
+                renderChart(currentChartType);
+                document.querySelector('button[onclick="toggleChartType()"]')
+                    .textContent = currentChartType === 'bar' ? 'Switch to Line Chart' : 'Switch to Bar Chart';
+            }
+        }
+    });
+</script>

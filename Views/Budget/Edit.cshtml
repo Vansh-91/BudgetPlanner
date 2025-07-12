@@ -1,0 +1,30 @@
+@model BudgetPlanner.Models.Transaction
+
+<h2 class="mb-4">Edit Transaction</h2>
+
+<form method="post" class="card p-4">
+    <input type="hidden" asp-for="Id" />
+
+    <div class="mb-3">
+        <label asp-for="Description" class="form-label"></label>
+        <input asp-for="Description" class="form-control" />
+    </div>
+
+    <div class="mb-3">
+        <label asp-for="Category" class="form-label"></label>
+        <input asp-for="Category" class="form-control" />
+    </div>
+
+    <div class="mb-3">
+        <label asp-for="Amount" class="form-label"></label>
+        <input asp-for="Amount" type="number" step="0.01" class="form-control" />
+    </div>
+
+    <div class="mb-3">
+        <label asp-for="Date" class="form-label"></label>
+        <input asp-for="Date" type="date" class="form-control" />
+    </div>
+
+    <button type="submit" class="btn btn-success">💾 Save Changes</button>
+    <a class="btn btn-secondary ms-2" href="/Budget">Cancel</a>
+</form>
